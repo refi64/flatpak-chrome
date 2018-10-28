@@ -1,0 +1,50 @@
+# app-id: com.google.Chrome
+app-id: org.google.Chrome.test
+runtime: org.freedesktop.Platform
+runtime-version: 18.08
+sdk: org.freedesktop.Sdk
+rename-desktop-file: google-chrome.desktop
+rename-appdata-file: google-chrome
+finish-args:
+  - '--device=dri'
+  - '--share=ipc'
+  - '--share=network'
+  - '--socket=pulseaudio'
+  - '--socket=x11'
+  - '--socket=wayland'
+  - '--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so'
+  - '--filesystem=home'
+modules:
+  - shared-modules/udev/udev-175.json
+  - name: chrome
+    buildsystem: simple
+    build-commands:
+      - 'ar x chrome.deb'
+      - 'tar xvf data.tar.xz'
+      - 'cp -r opt/google/chrome /app/chrome'
+      - 'mkdir -p /app/{bin,share}'
+      - 'cp -r usr/share/{appdata,applications} /app/share'
+      - 'ln -s /app/chrome/google-chrome /app/bin'
+      - |
+          for icon in 16 22 24 32 48 64 128 256; do
+            dir=/app/share/icons/hicolor/${icon}x${icon}/apps
+            mkdir -p $dir
+            cp /app/chrome/product_logo_$icon.png $dir/com.google.Chrome.png
+          done
+      - 'rm /app/chrome/chrome-sandbox'
+    sources:
+      - type: file
+        # https://dl.google.com/linux/chrome/deb/dists/stable/main/binary-amd64/Packages
+        url: https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_70.0.3538.67-1_amd64.deb
+        sha256: 0a8e56fb302418531b11eec93209358c4b9b138ff5bc190256c87eb15c171a46
+        dest-filename: chrome.deb
+  - name: fake-sandbox
+    buildsystem: simple
+    build-commands:
+      - 'gcc -g -O2 -fPIC -shared -o /app/lib/fake-sandbox-preload.so fake-sandbox-preload.c -ldl'
+      - 'gcc -g -O2 -o /app/chrome/chrome-sandbox fake-sandbox.c'
+    sources:
+      - type: file
+        path: fake-sandbox-preload.c
+      - type: file
+        path: fake-sandbox.c
