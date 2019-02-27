@@ -13,7 +13,7 @@
 
 
 char *g_prog = NULL;
-int enable_debug = 1;
+int enable_debug = 0;
 
 
 void debug(const char *str, ...) {
@@ -120,24 +120,8 @@ int *gather_fds_to_redirect(int max_fds) {
 
 #define BUFFER_SIZE 64
 
-int main(int argc, char **argv) {
-  if (argc < 2) {
-    fprintf(stderr, "wrong # of arguments for chrome-sandbox (Flatpak fake)");
-    return 1;
-  }
-
-  g_prog = argv[1];
-  check_debug();
-
-  if (strcmp(argv[1], "--get-api") == 0) {
-    puts("1");
-    return 0;
-  } else if (strcmp(argv[1], "--adjust-oom-score") == 0) {
-    // XXX
-    return 0;
-  }
-
-  debug("starting sandbox");
+int run_command(char **argv) {
+  debug("run_command inside sandbox: %s", argv[2]);
 
   int msgpipe[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, msgpipe) == -1) {
@@ -161,10 +145,50 @@ int main(int argc, char **argv) {
 
   close(child_end);
 
+  char envbuf[BUFFER_SIZE];
+
+  snprintf(envbuf, BUFFER_SIZE, "%d", parent_end);
+  setenv("SBX_D", envbuf, 1);
+
+  snprintf(envbuf, BUFFER_SIZE, "%ld", (long) forked);
+  setenv("SBX_HELPER_PID", envbuf, 1);
+
+  setenv("SBX_CHROME_API_PRV", "1", 1);
+  setenv("SBX_PID_NS", "", 1);
+  setenv("SBX_NET_NS", "", 1);
+
+  execv(argv[2], &argv[2]);
+
+  perror("execv failed");
+  close(parent_end);
+  return 1;
+}
+
+int main(int argc, char **argv) {
+  if (argc < 2) {
+    fprintf(stderr, "wrong # of arguments for chrome-sandbox (Flatpak fake)");
+    return 1;
+  }
+
+  g_prog = argv[1];
+  check_debug();
+
+  if (strcmp(argv[1], "--get-api") == 0) {
+    puts("1");
+    return 0;
+  } else if (strcmp(argv[1], "--adjust-oom-score") == 0) {
+    // XXX
+    return 0;
+  } else if (strcmp(argv[1], "--wrap-spawned") == 0) {
+    g_prog = argv[2];
+    return run_command(argv);
+  }
+
+  debug("starting sandbox");
+
   int max_fds = get_max_fds();
   int *fds_to_redirect = gather_fds_to_redirect(max_fds);
   if (fds_to_redirect == NULL) {
-    close(parent_end);
     return 1;
   }
 
@@ -172,79 +196,57 @@ int main(int argc, char **argv) {
   snprintf(dbus_addr, BUFFER_SIZE, "unix:path=/run/user/%lu/bus", (unsigned long) getuid());
   setenv("DBUS_SESSION_BUS_ADDRESS", dbus_addr, 1);
 
-  const char *spawn[] = {
-    /* "SBX_CHROME_API_PRV=1", */
-    /* "SBX_D=%d", */
-    /* "SBX_HELPER_PID=%ld", */
-    /* "SBX_PID_NS=", */
-    /* "SBX_NET_NS=", */
-
-    /* "LD_PRELOAD=/app/lib/fake-sandbox-preload.so", */
-
-    /* "/usr/bin/bash", */
-    /* "-c", */
-    /* "env && echo \"$@\" && exec \"$@\"", */
-    /* "script", */
-
-    "/usr/bin/flatpak-spawn",
-    /* "--sandbox", */
-    "--env=SBX_CHROME_API_PRV=1",
-    "--env=SBX_D=%d",
-    "--env=SBX_HELPER_PID=%ld",
-    "--env=SBX_PID_NS=",
-    "--env=SBX_NET_NS=",
-    "--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so",
-
-    /* "--env=DBUS_SESSION_BUS_ADDRESS=/run/user/1000/bus", */
-
-    /* "/usr/bin/flatpak-spawn", */
-    /* "--sandbox", */
-    /* "--forward-fd=%d", */
-    /* "--env=SBX_CHROME_API_PRV=1", */
-    /* "--env=SBX_D=%d", */
-    /* "--env=SBX_HELPER_PID=%ld", */
-    /* "--env=SBX_PID_NS=", */
-    /* "--env=SBX_NET_NS=", */
-  };
-
   #define COMMAND_SPAWN_SIZE (sizeof(spawn) / sizeof(spawn[0]))
 
-  const char **command = malloc(sizeof(char *) * (argc + COMMAND_SPAWN_SIZE + max_fds));
+  /* const char **command = malloc(sizeof(char *) * (argc + COMMAND_SPAWN_SIZE + max_fds)); */
 
-  for (int i = 0; i < COMMAND_SPAWN_SIZE; i++) {
-    const char *string = spawn[i];
+  const int command_len =
+    2            // flatpak-spawn --env=LD_PRELOAD=...
+    + 10         // TODO: remove
+    + max_fds    // --forward-fd arguments
+    + 2          // chrome-sandbox --wrap-spawned
+    + (argc - 1) // command to run
+    + 1          // null terminator
+  ;
 
-    if (strchr(string, '%') != NULL) {
-      char *buf = malloc(BUFFER_SIZE);
+  /* const char **command = malloc(sizeof(char *) + ); */
+  const char **command = calloc(command_len, sizeof(char *));
+  int command_index = 0;
 
-      if (strstr(string, "SBX_D") != NULL) {
-        snprintf(buf, BUFFER_SIZE, string, parent_end);
-      } else if (strstr(string, "SBX_HELPER_PID")) {
-        snprintf(buf, BUFFER_SIZE, string, forked);
-      } else {
-        fprintf(stderr, "internal error: invalid arg in spawn: %s\n", string);
-        abort();
-      }
+  /* command[command_index++] = "/usr/bin/flatpak-spawn"; */
+  /* command[command_index++] = "--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so"; */
+  command[command_index++] = "/usr/bin/env";
+  /* command[command_index++] = "--sandbox"; */
+  /* command[command_index++] = "/usr/bin/strace"; */
+  /* command[command_index++] = "-f"; */
+  /* command[command_index++] = "-ELD_PRELOAD=/app/lib/fake-sandbox-preload.so"; */
+  command[command_index++] = "LD_PRELOAD=/app/lib/fake-sandbox-preload.so";
 
-      string = buf;
-    }
 
-    command[i] = string;
-  }
-
-  int n_fds_to_redirect = 0;
-  for (; fds_to_redirect[n_fds_to_redirect] != 0; n_fds_to_redirect++) {
+  for (int i = 0; fds_to_redirect[i] != 0; i++) {
     char *buf = malloc(BUFFER_SIZE);
-    snprintf(buf, BUFFER_SIZE, "--forward-fd=%d", fds_to_redirect[n_fds_to_redirect]);
+    snprintf(buf, BUFFER_SIZE, "--forward-fd=%d", fds_to_redirect[i]);
 
-    command[n_fds_to_redirect + COMMAND_SPAWN_SIZE] = buf;
+    command[command_index++] = buf;
   }
+
+
+  /* command[command_index++] = "/usr/bin/strace"; */
+  /* command[command_index++] = "-f"; */
+  /* command[command_index++] = "-ELD_PRELOAD=/app/lib/fake-sandbox-preload.so"; */
+
+  command[command_index++] = "/app/chrome/chrome-sandbox";
+  command[command_index++] = "--wrap-spawned";
 
   for (int i = 1; i < argc; i++) {
-    command[i + COMMAND_SPAWN_SIZE + n_fds_to_redirect - 1] = argv[i];
+    command[command_index++] = argv[i];
   }
 
-  command[COMMAND_SPAWN_SIZE + n_fds_to_redirect + argc - 1] = NULL;
+  /* for (int i = 1; i < argc; i++) { */
+  /*   command[i + COMMAND_SPAWN_SIZE + n_fds_to_redirect - 1] = argv[i]; */
+  /* } */
+
+  /* command[COMMAND_SPAWN_SIZE + n_fds_to_redirect + argc - 1] = NULL; */
 
   for (const char **p = command; *p != NULL; p++) {
     debug("* %s", *p);
@@ -253,6 +255,5 @@ int main(int argc, char **argv) {
   execv(command[0], (char * const *) command);
 
   perror("execv failed");
-  close(parent_end);
   return 1;
 }

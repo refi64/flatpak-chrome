@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -37,6 +38,7 @@ static int dlsym_safe = 0;
 #define load_original(ptr, name) do { \
     if (*(ptr) == NULL) { \
       *(ptr) = dlsym(RTLD_NEXT, name); \
+      atomic_set(&dlsym_safe, 1); \
     } \
   } while (0)
 
@@ -48,11 +50,7 @@ typedef int (* original_xstat64_t)(int ver, const char *path, struct stat64 *buf
 static __thread original_xstat64_t original_xstat64 = NULL;
 
 int __xstat64(int ver, const char *path, struct stat64 *buf) {
-  atomic_set(&dlsym_safe, 1);
-
-  if (original_xstat64 == NULL) {
-    original_xstat64 = dlsym(RTLD_NEXT, "__xstat64");
-  }
+  load_original(&original_xstat64, "__xstat64");
 
   int result = original_xstat64(ver, path, buf);
   if (strcmp(path, "/app/chrome/chrome-sandbox") == 0) {
@@ -83,15 +81,11 @@ int __xstat64(int ver, const char *path, struct stat64 *buf) {
 
 /*
   This is used by write to check the state of the sandbox request.
-
-  It's either unsent, sent, or sent *and* handled by open64 (meaning that the
-  /proc/self/exe has been failed to make nacl_helper think the sandbox is on).
 */
 
 enum {
   SANDBOX_REQUEST_UNSENT,
   SANDBOX_REQUEST_SENT,
-  SANDBOX_REQUEST_HANDLED,
 };
 
 static int sandbox_request_state = SANDBOX_REQUEST_UNSENT;
@@ -116,24 +110,22 @@ typedef ssize_t (* original_write_t)(int fd, const void *buf, size_t len);
 static __thread original_write_t original_write = NULL;
 
 ssize_t write(int fd, const void *buf, size_t len) {
-  atomic_set(&dlsym_safe, 1);
-
   load_original(&original_write, "write");
 
   if (sandbox_fd == SANDBOX_FD_UNSET) {
-    if (strcmp(program_invocation_short_name, "nacl_helper")) {
-      const char *sandbox_fd_str = getenv("SBX_D");
-      if (sandbox_fd_str != NULL) {
-        char *ep;
-        int fd = strtol(sandbox_fd_str, &ep, 10);
-        sandbox_fd = *ep == '\0' ? fd : SANDBOX_FD_INVALID;
-      }
+    const char *sandbox_fd_str = getenv("SBX_D");
+    if (sandbox_fd_str != NULL) {
+      char *ep;
+      int fd = strtol(sandbox_fd_str, &ep, 10);
+      sandbox_fd = *ep == '\0' ? fd : SANDBOX_FD_INVALID;
     } else {
-      // Not nacl_helper, so ignore.
+      // Not our target process, so ignore.
       sandbox_fd = SANDBOX_FD_IGNORE;
     }
   }
 
+  /* We want to track when the sandbox request is send to lie about being able to access
+     /proc/self/exe later in open64 */
   if (sandbox_fd > 0 && len == 1 && ((char *)buf)[0] == 'C' && sandbox_fd == fd) {
     atomic_set(&sandbox_request_state, SANDBOX_REQUEST_SENT);
   }
@@ -168,8 +160,6 @@ int open64(const char *path, int flags, ...) {
 
   if (atomic_get(&sandbox_request_state) == SANDBOX_REQUEST_SENT &&
       strcmp(path, "/proc/self/exe") == 0) {
-    // Let getpid know /proc/self/exe has been handled, and it can return 1.
-    atomic_set(&sandbox_request_state, SANDBOX_REQUEST_HANDLED);
     errno = ENOENT;
     return -1;
   }
@@ -177,11 +167,7 @@ int open64(const char *path, int flags, ...) {
   if (__OPEN_NEEDS_MODE(flags)) {
     return original_open64(path, flags, mode);
   } else {
-    /* return original_open64(path, flags); */
-    errno = 0;
-    int r = original_open64(path, flags);
-    printf("\n******open64: %s %s: %d (%s)\n", program_invocation_short_name, path, r, strerror(errno));
-    return r;
+    return original_open64(path, flags);
   }
 }
 
@@ -189,13 +175,11 @@ int open64(const char *path, int flags, ...) {
 typedef pid_t (* original_getpid_t) ();
 static __thread original_getpid_t original_getpid = NULL;
 
+// If we're supposed to be in the sandbox, pretend we're PID 1.
 pid_t getpid() {
   load_original(&original_getpid, "getpid");
 
-  /* return original_getpid(); */
-
-  printf("\n*****getpid: %s\n", program_invocation_short_name);
-  if (atomic_get(&sandbox_request_state) == SANDBOX_REQUEST_HANDLED) {
+  if (getenv("SBX_CHROME_API_PRV") != NULL) {
     return 1;
   } else {
     return original_getpid();
@@ -203,15 +187,15 @@ pid_t getpid() {
 }
 
 
-typedef ssize_t (* original_sendmsg_t)(int sockfd, const struct msghdr *msg, int flags);
-static __thread original_sendmsg_t original_sendmsg = NULL;
+/* typedef ssize_t (* original_sendmsg_t)(int sockfd, const struct msghdr *msg, int flags); */
+/* static __thread original_sendmsg_t original_sendmsg = NULL; */
 
 
-ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags) {
-  load_original(&original_sendmsg, "sendmsg");
+/* ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags) { */
+/*   load_original(&original_sendmsg, "sendmsg"); */
 
-  errno = 0;
-  ssize_t r = original_sendmsg(sockfd, msg, flags);
-  printf("\n*****sendmsg: %s %d %zd %s\n", program_invocation_short_name, sockfd, r, strerror(errno));
-  return r;
-}
+/*   errno = 0; */
+/*   ssize_t r = original_sendmsg(sockfd, msg, flags); */
+  /* printf("\n*****sendmsg: %s %d %zd %s\n", program_invocation_short_name, sockfd, r, strerror(errno)); */
+/*   return r; */
+/* } */
