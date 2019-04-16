@@ -1,10 +1,12 @@
 # app-id: com.google.Chrome
 app-id: com.google.Chrome.test
+desktop-file-name-prefix: '(Testing) '
 runtime: org.freedesktop.Platform
 runtime-version: '18.08'
 sdk: org.freedesktop.Sdk
 rename-desktop-file: google-chrome.desktop
 rename-appdata-file: google-chrome
+rename-icon: google-chrome
 finish-args:
   - '--device=dri'
   - '--share=ipc'
@@ -31,7 +33,7 @@ modules:
           for icon in 16 22 24 32 48 64 128 256; do
             dir=/app/share/icons/hicolor/${icon}x${icon}/apps
             mkdir -p $dir
-            cp /app/chrome/product_logo_$icon.png $dir/com.google.Chrome.png
+            cp /app/chrome/product_logo_$icon.png $dir/google-chrome.png
           done
       - 'rm /app/chrome/chrome-sandbox'
     sources:
@@ -44,7 +46,7 @@ modules:
     buildsystem: simple
     build-commands:
       - 'gcc -g -O2 -fPIC -shared -o /app/lib/fake-sandbox-preload.so fake-sandbox-preload.c -ldl'
-      - 'gcc -g -O2 -o /app/chrome/chrome-sandbox fake-sandbox.c'
+      - 'gcc -g -O2 -o /app/chrome/chrome-sandbox fake-sandbox.c `pkg-config --cflags --libs glib-2.0 gio-2.0`'
     sources:
       - type: file
         path: fake-sandbox-preload.c

@@ -1,5 +1,8 @@
 #define _GNU_SOURCE
 
+#include <glib.h>
+#include <gio/gio.h>
+
 #include <dirent.h>
 #include <errno.h>
 #include <sched.h>
@@ -9,11 +12,12 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 
 char *g_prog = NULL;
-int enable_debug = 0;
+int enable_debug = 1;
 
 
 void debug(const char *str, ...) {
@@ -26,7 +30,7 @@ void debug(const char *str, ...) {
 
     va_end(va);
 
-    fprintf(stderr, "[fake-sandbox: %s] %s\n", g_prog, out);
+    g_printerr("[fake-sandbox: %s] %s\n", g_prog, out);
   }
 }
 
@@ -62,7 +66,7 @@ int child(int fd) {
     debug("chroot pipe early exit");
     goto end;
   } else if (msg != 'C') {
-    fprintf(stderr, "chroot message pipe returned invalid message: %d (%c)\n", (int) msg, msg);
+    g_printerr("chroot message pipe returned invalid message: %d (%c)\n", (int) msg, msg);
     ret = 1;
     goto end;
   }
@@ -83,21 +87,13 @@ end:
 }
 
 
-int get_max_fds() {
-  struct rlimit rlim;
-  getrlimit(RLIMIT_NOFILE, &rlim);
-  return rlim.rlim_cur;
-}
-
-
-int *gather_fds_to_redirect(int max_fds) {
+GArray *gather_fds_to_redirect() {
   /*
     Certain file descriptors need to always be redirected via flatpak-spawn. This finds all
-    of those and returns them in a null-terminated array.
+    of those and returns them.
   */
 
-  int *fds = calloc(max_fds, sizeof(int));
-  int cur_fd = 0;
+  g_autoptr(GArray) fds = g_array_new(FALSE, FALSE, sizeof(int));
 
   DIR *dir = opendir("/proc/self/fd");
   if (dir == NULL) {
@@ -107,15 +103,15 @@ int *gather_fds_to_redirect(int max_fds) {
   }
 
   struct dirent *dp;
-  while ((dp = readdir(dir)) != NULL && cur_fd < max_fds) {
+  while ((dp = readdir(dir)) != NULL) {
     int fd = strtol(dp->d_name, NULL, 10);
     if (fd != dirfd(dir) && fd > 2) {
-      fds[cur_fd++] = fd;
+      g_array_append_val(fds, fd);
     }
   }
 
   closedir(dir);
-  return fds;
+  return g_steal_pointer(&fds);
 }
 
 #define BUFFER_SIZE 64
@@ -166,7 +162,7 @@ int run_command(char **argv) {
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    fprintf(stderr, "wrong # of arguments for chrome-sandbox (Flatpak fake)");
+    g_printerr("wrong # of arguments for chrome-sandbox (Flatpak fake)");
     return 1;
   }
 
@@ -186,74 +182,68 @@ int main(int argc, char **argv) {
 
   debug("starting sandbox");
 
-  int max_fds = get_max_fds();
-  int *fds_to_redirect = gather_fds_to_redirect(max_fds);
+  g_autoptr(GArray) fds_to_redirect = gather_fds_to_redirect();
   if (fds_to_redirect == NULL) {
     return 1;
   }
 
-  char dbus_addr[BUFFER_SIZE];
-  snprintf(dbus_addr, BUFFER_SIZE, "unix:path=/run/user/%lu/bus", (unsigned long) getuid());
+  g_autofree char *dbus_addr = g_strdup_printf("unix:path=/run/user/%lu/bus", (gulong) getuid());
   setenv("DBUS_SESSION_BUS_ADDRESS", dbus_addr, 1);
+  g_clear_pointer(&dbus_addr, g_free);
 
-  #define COMMAND_SPAWN_SIZE (sizeof(spawn) / sizeof(spawn[0]))
+  g_autoptr(GPtrArray) command = g_ptr_array_new_with_free_func(g_free);
 
-  /* const char **command = malloc(sizeof(char *) * (argc + COMMAND_SPAWN_SIZE + max_fds)); */
+  /* g_ptr_array_add(command, g_strdup("/usr/bin/env")); */
+  g_ptr_array_add(command, g_strdup("/usr/bin/flatpak-spawn"));
+  /* g_ptr_array_add(command, g_strdup("--sandbox")); */
+  /* g_ptr_array_add(command, g_strdup("--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so")); */
+  /* g_ptr_array_add(command, g_strdup("LD_PRELOAD=/app/lib/fake-sandbox-preload.so")); */
 
-  const int command_len =
-    2            // flatpak-spawn --env=LD_PRELOAD=...
-    + 10         // TODO: remove
-    + max_fds    // --forward-fd arguments
-    + 2          // chrome-sandbox --wrap-spawned
-    + (argc - 1) // command to run
-    + 1          // null terminator
-  ;
-
-  /* const char **command = malloc(sizeof(char *) + ); */
-  const char **command = calloc(command_len, sizeof(char *));
-  int command_index = 0;
-
-  /* command[command_index++] = "/usr/bin/flatpak-spawn"; */
-  /* command[command_index++] = "--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so"; */
-  command[command_index++] = "/usr/bin/env";
-  /* command[command_index++] = "--sandbox"; */
-  /* command[command_index++] = "/usr/bin/strace"; */
-  /* command[command_index++] = "-f"; */
-  /* command[command_index++] = "-ELD_PRELOAD=/app/lib/fake-sandbox-preload.so"; */
-  command[command_index++] = "LD_PRELOAD=/app/lib/fake-sandbox-preload.so";
-
-
-  for (int i = 0; fds_to_redirect[i] != 0; i++) {
-    char *buf = malloc(BUFFER_SIZE);
-    snprintf(buf, BUFFER_SIZE, "--forward-fd=%d", fds_to_redirect[i]);
-
-    command[command_index++] = buf;
+  for (int i = 0; i < fds_to_redirect->len; i++) {
+    g_ptr_array_add(command, g_strdup_printf("--forward-fd=%d",
+                                             g_array_index(fds_to_redirect, int, i)));
   }
 
+  g_ptr_array_add(command, g_strdup("/usr/bin/strace"));
+  g_ptr_array_add(command, g_strdup("-f"));
+  g_ptr_array_add(command, g_strdup("-ELD_PRELOAD=/app/lib/fake-sandbox-preload.so"));
 
-  /* command[command_index++] = "/usr/bin/strace"; */
-  /* command[command_index++] = "-f"; */
-  /* command[command_index++] = "-ELD_PRELOAD=/app/lib/fake-sandbox-preload.so"; */
-
-  command[command_index++] = "/app/chrome/chrome-sandbox";
-  command[command_index++] = "--wrap-spawned";
+  g_ptr_array_add(command, g_strdup("/app/chrome/chrome-sandbox"));
+  g_ptr_array_add(command, g_strdup("--wrap-spawned"));
 
   for (int i = 1; i < argc; i++) {
-    command[command_index++] = argv[i];
+    g_ptr_array_add(command, g_strdup(argv[i]));
   }
 
-  /* for (int i = 1; i < argc; i++) { */
-  /*   command[i + COMMAND_SPAWN_SIZE + n_fds_to_redirect - 1] = argv[i]; */
-  /* } */
-
-  /* command[COMMAND_SPAWN_SIZE + n_fds_to_redirect + argc - 1] = NULL; */
-
-  for (const char **p = command; *p != NULL; p++) {
-    debug("* %s", *p);
+  for (int i = 0; i < command->len; i++) {
+    debug("* %s", g_ptr_array_index(command, i));
   }
 
-  execv(command[0], (char * const *) command);
+  g_ptr_array_add(command, NULL);
 
-  perror("execv failed");
-  return 1;
+  pid_t child = fork();
+  if (child == -1) {
+    perror("forking child");
+    return 1;
+  } else if (child == 0) {
+    execv(g_ptr_array_index(command, 0), (char * const *) command->pdata);
+    perror("execv failed");
+    return 1;
+  } else {
+    int wstatus;
+    if (waitpid(child, &wstatus, 0) == -1) {
+      perror("waitpid");
+      return 1;
+    }
+
+    if (WIFEXITED(wstatus)) {
+      return WEXITSTATUS(wstatus);
+    } else if (WIFSIGNALED(wstatus)) {
+      g_printerr("child died due to signal %d\n", WTERMSIG(wstatus));
+      return 1;
+    } else {
+      g_printerr("child died due to unknown reason\n");
+      return 1;
+    }
+  }
 }

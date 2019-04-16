@@ -185,17 +185,3 @@ pid_t getpid() {
     return original_getpid();
   }
 }
-
-
-/* typedef ssize_t (* original_sendmsg_t)(int sockfd, const struct msghdr *msg, int flags); */
-/* static __thread original_sendmsg_t original_sendmsg = NULL; */
-
-
-/* ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags) { */
-/*   load_original(&original_sendmsg, "sendmsg"); */
-
-/*   errno = 0; */
-/*   ssize_t r = original_sendmsg(sockfd, msg, flags); */
-  /* printf("\n*****sendmsg: %s %d %zd %s\n", program_invocation_short_name, sockfd, r, strerror(errno)); */
-/*   return r; */
-/* } */
