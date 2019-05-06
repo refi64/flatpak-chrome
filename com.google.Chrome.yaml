@@ -46,9 +46,9 @@ modules:
     buildsystem: simple
     build-commands:
       - 'gcc -g -O2 -fPIC -shared -o /app/lib/fake-sandbox-preload.so fake-sandbox-preload.c -ldl'
-      - 'gcc -g -O2 -o /app/chrome/chrome-sandbox fake-sandbox.c `pkg-config --cflags --libs glib-2.0 gio-2.0`'
+      - 'g++ -std=c++17 -g -O2 -o /app/chrome/chrome-sandbox fake-sandbox.cpp'
     sources:
       - type: file
         path: fake-sandbox-preload.c
       - type: file
-        path: fake-sandbox.c
+        path: fake-sandbox.cpp
