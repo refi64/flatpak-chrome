@@ -7,6 +7,7 @@ sdk: org.freedesktop.Sdk
 rename-desktop-file: google-chrome.desktop
 rename-appdata-file: google-chrome
 rename-icon: google-chrome
+command: start-chrome
 finish-args:
   - '--device=dri'
   - '--share=ipc'
@@ -14,8 +15,13 @@ finish-args:
   - '--socket=pulseaudio'
   - '--socket=x11'
   - '--socket=wayland'
-  - '--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so'
+  - '--talk-name=org.freedesktop.Notifications'
   - '--filesystem=home'
+
+  - '--filesystem=xdg-run/dconf'
+  - '--filesystem=~/.config/dconf:ro'
+  - '--talk-name=ca.desrt.dconf'
+  - '--env=DCONF_USER_CONFIG_DIR=.config/dconf'
 build-options:
   no-debuginfo: true  # XXX
 modules:
@@ -52,3 +58,12 @@ modules:
         path: fake-sandbox-preload.c
       - type: file
         path: fake-sandbox.cpp
+  - name: files
+    buildsystem: simple
+    build-commands:
+      - 'install -Dm 755 start-chrome.sh /app/bin/start-chrome'
+    sources:
+      - type: script
+        dest-filename: start-chrome.sh
+        commands:
+          - 'LD_PRELOAD=/app/lib/fake-sandbox-preload.so /app/chrome/chrome "$@"'

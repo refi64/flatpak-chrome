@@ -232,6 +232,13 @@ std::optional<std::vector<int>> gather_fds_to_redirect() {
 int flatpak_spawn(std::vector<std::string> args, std::vector<int> fds_to_redirect) {
   debug() << "starting sandbox" << std::endl;
 
+  if (auto home_opt = env::get("HOME")) {
+    if (chdir(home_opt->c_str()) == -1) {
+      auto err = errno_code();
+      log() << "warning: chdir(/app) failed: " << err.message() << std::endl;
+    }
+  }
+
   uid_t uid = getuid();
   env::set("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/"s + std::to_string(uid) + "/bus");
 
