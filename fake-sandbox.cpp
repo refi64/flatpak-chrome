@@ -82,7 +82,7 @@ public:
   unique_fd(int fd): fd_{fd} {}
   unique_fd(const unique_fd& other)=delete;
   unique_fd(unique_fd&& other): fd_{-1} { std::swap(fd_, other.fd_); }
-  ~unique_fd() { if (fd_ != -1) close(fd_); }
+  ~unique_fd() { destroy(); }
 
   operator bool() { return fd_ != -1; }
   int get() { return fd_; }
@@ -93,6 +93,14 @@ public:
     return save;
   }
 private:
+  void destroy() {
+    if (fd_ != -1) {
+      close(fd_);
+    }
+
+    fd_ = -1;
+  }
+
   int fd_;
 };
 
@@ -120,7 +128,7 @@ void exec(It start, It stop) {
   log() << "exec of " << args[0] << " failed: " << err.message() << std::endl;
 }
 
-int parent(std::vector<std::string> args, pid_t child_pid, unique_fd fd) {
+int run_command(std::vector<std::string> args, pid_t child_pid, unique_fd fd) {
   env::set("SBX_D", std::to_string(fd.steal()));
   env::set("SBX_HELPER_PID", std::to_string(child_pid));
 
@@ -132,7 +140,7 @@ int parent(std::vector<std::string> args, pid_t child_pid, unique_fd fd) {
   return 1;
 }
 
-int child(unique_fd fd) {
+int sandbox_helper_stub(unique_fd fd) {
   char msg = 0;
 
   debug() << "waiting for chroot request" << std::endl;
@@ -169,7 +177,7 @@ int child(unique_fd fd) {
   return 0;
 }
 
-int run_command(std::vector<std::string> args) {
+int run_command_with_sandbox_helper(std::vector<std::string> args) {
   debug() << "running command inside sandbox";
 
   auto [parent_end, child_end] = create_socket_pair();
@@ -183,9 +191,9 @@ int run_command(std::vector<std::string> args) {
     log() << "fork: " << err.message() << std::endl;
     return 1;
   } else if (forked == 0) {
-    return child(std::move(child_end));
+    return sandbox_helper_stub(std::move(child_end));
   } else {
-    return parent(args, forked, std::move(parent_end));
+    return run_command(args, forked, std::move(parent_end));
   }
 }
 
@@ -296,7 +304,7 @@ int main(int argc, char** argv) {
     return 0;
   } else if (args[1] == "--wrap-spawned") {
     debug_detail::prog = args[2];
-    return run_command(std::move(args));
+    return run_command_with_sandbox_helper(std::move(args));
   } else {
     debug_detail::prog = args[1];
 
