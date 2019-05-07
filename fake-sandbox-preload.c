@@ -185,3 +185,34 @@ pid_t getpid() {
     return original_getpid();
   }
 }
+
+
+typedef size_t (* original_recvmsg_t) (int sock, struct msghdr *msg, int flags);
+static __thread original_recvmsg_t original_recvmsg = NULL;
+
+// Chrome expects recvmsg to return a proper pid, not...pid 0.
+ssize_t recvmsg(int sock, struct msghdr *msg, int flags) {
+  load_original(&original_recvmsg, "recvmsg");
+
+  ssize_t res = original_recvmsg(sock, msg, flags);
+  if (res == -1) {
+    return res;
+  }
+
+  if (msg->msg_controllen > 0) {
+    struct cmsghdr *cmsg;
+    for (cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+      if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_CREDENTIALS) {
+        pid_t *pid = &((struct ucred *) CMSG_DATA(cmsg))->pid;
+        if (*pid == 0) {
+          /* XXX: Zygote also tries to track these processes, so this needs to somehow be
+             wired to the flatpak-spawn PID */
+          *pid = 2;
+        }
+        break;
+      }
+    }
+  }
+
+  return res;
+}
