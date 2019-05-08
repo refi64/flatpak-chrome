@@ -18,7 +18,7 @@ using namespace std::literals::string_literals;
 
 namespace debug_detail {
   std::string prog{"<unset>"};
-  bool enable = true;
+  bool enable = false;
 }
 
 std::ostream& log() {

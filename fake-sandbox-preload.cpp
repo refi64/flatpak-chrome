@@ -54,19 +54,18 @@ DECLARE_OVERRIDE(int, __xstat64, int ver, const char *path, struct stat64 *buf) 
 }
 
 // Chrome expects recvmsg to return a proper pid, not...pid 0.
-DECLARE_OVERRIDE(ssize_t, recvmsg, int sock, struct msghdr *msg, int flags) {
+DECLARE_OVERRIDE(ssize_t, recvmsg, int fd, struct msghdr* msg, int flags) {
   auto original = recvmsg_load();
 
-  ssize_t res = original(sock, msg, flags);
+  ssize_t res = original(fd, msg, flags);
   if (res == -1) {
     return res;
   }
 
   if (msg->msg_controllen > 0) {
-    struct cmsghdr *cmsg;
-    for (cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
       if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_CREDENTIALS) {
-        pid_t& pid = ((struct ucred *) CMSG_DATA(cmsg))->pid;
+        pid_t& pid = reinterpret_cast<struct ucred*>(CMSG_DATA(cmsg))->pid;
         if (pid == 0) {
           /* XXX: Zygote also tries to track these processes, so this needs to somehow be
              wired to the flatpak-spawn PID */
@@ -150,8 +149,6 @@ DECLARE_OVERRIDE(int, open64, const char *path, int flags, ...) {
     mode = va_arg(va, int);
     va_end(va);
   }
-
-
 
   // Use the syscall if dlsym hasn't been confirmed to be safe.
   if (!loading_detail::dlsym_safe.load()) {
