@@ -51,11 +51,11 @@ modules:
   - name: fake-sandbox
     buildsystem: simple
     build-commands:
-      - 'gcc -g -O2 -fPIC -shared -o /app/lib/fake-sandbox-preload.so fake-sandbox-preload.c -ldl'
-      - 'g++ -std=c++17 -g -O2 -o /app/chrome/chrome-sandbox fake-sandbox.cpp'
+      - 'clang++ -std=c++17 -g -O2 -fPIC -shared -o /app/lib/fake-sandbox-preload.so fake-sandbox-preload.cpp -ldl'
+      - 'clang++ -std=c++17 -g -O2 -o /app/chrome/chrome-sandbox fake-sandbox.cpp'
     sources:
       - type: file
-        path: fake-sandbox-preload.c
+        path: fake-sandbox-preload.cpp
       - type: file
         path: fake-sandbox.cpp
   - name: files
