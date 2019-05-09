@@ -15,10 +15,12 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -260,10 +262,10 @@ std::optional<std::vector<int>> gather_fds_to_redirect() {
   return fds;
 }
 
-using fd_remapped_set = std::vector<std::array<unique_fd, 2>>;
+using remapped_fd_set = std::vector<std::array<unique_fd, 2>>;
 
-fd_remapped_set remap_redirected_fds(std::vector<int> fds_to_redirect) {
-  fd_remapped_set remapped;
+remapped_fd_set remap_redirected_fds(std::vector<int> fds_to_redirect) {
+  remapped_fd_set remapped;
 
   for (int fd : fds_to_redirect) {
     fd_pair_category category = fd_pair_category::socket;
@@ -298,7 +300,8 @@ fd_remapped_set remap_redirected_fds(std::vector<int> fds_to_redirect) {
   return remapped;
 }
 
-int flatpak_spawn(std::vector<std::string> args, std::vector<int> fds_to_redirect) {
+int flatpak_spawn(std::vector<std::string> args, std::vector<int> fds_to_redirect,
+                  remapped_fd_set remapped) {
   debug() << "starting sandbox" << std::endl;
 
   if (prctl(PR_SET_PDEATHSIG, SIGKILL) == -1) {
@@ -367,7 +370,7 @@ namespace uint32_pair {
   }
 }
 
-int epoll_loop(pid_t child, fd_remapped_set remapped) {
+int epoll_loop(pid_t child, remapped_fd_set remapped) {
   unique_fd epfd{epoll_create1(0)};
   if (!epfd) {
     auto err = errno_code();
@@ -495,7 +498,7 @@ int spawn_sandbox(std::vector<std::string> args, std::vector<int> fds_to_redirec
     log() << "fork: " << err.message() << std::endl;
     return 1;
   } else if (forked == 0) {
-    return flatpak_spawn(std::move(args), std::move(fds_to_redirect));
+    return flatpak_spawn(std::move(args), std::move(fds_to_redirect), std::move(remapped));
   } else {
     return epoll_loop(forked, std::move(remapped));
   }
