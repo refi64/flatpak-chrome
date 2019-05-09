@@ -19,9 +19,9 @@ namespace loading_detail {
   std::atomic<bool> dlsym_safe;
 
   template <typename T>
-  T load_func(T& ptr, const char* name) {
+  T load_func(T& ptr, std::string_view name) {
     if (!ptr) {
-      ptr = reinterpret_cast<T>(dlsym(RTLD_NEXT, name));
+      ptr = reinterpret_cast<T>(dlsym(RTLD_NEXT, name.data()));
       dlsym_safe.store(true);
     }
 
@@ -116,8 +116,7 @@ DECLARE_OVERRIDE(ssize_t, write, int fd, const void *buf, size_t len) {
   if (sandbox_tracking_detail::fd == sandbox_tracking_detail::fd_unset) {
     std::lock_guard<std::mutex> guard{sandbox_tracking_detail::fd_mutex};
 
-    const char* sbx_d = getenv("SBX_D");
-    if (sbx_d) {
+    if (const char* sbx_d = getenv("SBX_D")) {
       try {
         sandbox_tracking_detail::fd = std::stoi(sbx_d);
       } catch (std::exception& ex) {
