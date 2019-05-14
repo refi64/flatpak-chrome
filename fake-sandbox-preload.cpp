@@ -79,6 +79,17 @@ DECLARE_OVERRIDE(ssize_t, recvmsg, int fd, struct msghdr* msg, int flags) {
   return res;
 }
 
+DECLARE_OVERRIDE(int, close, int fd) {
+  /* close isn't always dlsym-safe but also is a pretty simple syscall, just DIY it */
+
+  // Skip closing fake-sandbox's sandbox_supervisor_fd.
+  if (fd == 235) {
+    return 0;
+  }
+
+  return syscall(__NR_close, fd);
+}
+
 /*
   All the rest of this code is to circumvent nacl_helper's sandboxing checks.
 
