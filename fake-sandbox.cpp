@@ -465,21 +465,17 @@ void flatpak_spawn(std::vector<std::string> args, std::vector<int> fds_to_redire
 
   std::vector<std::string> command;
   command.push_back("/usr/bin/flatpak-spawn");
-  /* command.push_back("--verbose"); */
   command.push_back("--watch-bus");
   command.push_back("--sandbox");
-  /* command.push_back("--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so"); */
+  command.push_back("--env=LD_PRELOAD=/app/lib/fake-sandbox-preload.so");
 
   for (int fd : fds_to_redirect) {
     command.push_back("--forward-fd="s + std::to_string(fd));
   }
 
-  /* command.push_back("/usr/bin/env"); */
-  /* command.push_back("LD_PRELOAD=/app/lib/fake-sandbox-preload.so"); */
-
-  command.push_back("/usr/bin/strace");
-  command.push_back("-f");
-  command.push_back("-ELD_PRELOAD=/app/lib/fake-sandbox-preload.so");
+  /* command.push_back("/usr/bin/strace"); */
+  /* command.push_back("-f"); */
+  /* command.push_back("-ELD_PRELOAD=/app/lib/fake-sandbox-preload.so"); */
 
   command.push_back("/app/chrome/chrome-sandbox");
   command.push_back("--wrap-spawned");
