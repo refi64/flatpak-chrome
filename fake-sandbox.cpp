@@ -294,6 +294,18 @@ std::tuple<unique_fd, unique_fd> create_fd_pair(fd_pair_category category) {
   return {unique_fd{fds[0]}, unique_fd{fds[1]}};
 }
 
+void rename_process(std::string_view name) {
+  if (name.size() > 15) {
+    log() << "WARNING: rename_process(" << name << "): name too long, will be truncated"
+          << std::endl;
+  }
+
+  if (prctl(PR_SET_NAME, reinterpret_cast<unsigned long>(name.data()), 0, 0, 0) == -1) {
+    auto err = errno_code();
+    log() << "prctl(PR_SET_NAME, " << name << ") failed: " << err.message() << std::endl;
+  }
+}
+
 template <typename It>
 void exec(It start, It stop) {
   std::vector<const char*> args;
@@ -319,6 +331,8 @@ int run_command(std::vector<std::string> args, pid_t child_pid, unique_fd fd) {
 }
 
 int sandbox_helper_stub(unique_fd fd) {
+  // Mimick the chroot helper process, which would normally chroot into /proc/self/fd.
+  rename_process("flatpakcrchroot");
   debug() << "waiting for chroot request" << std::endl;
 
   char msg = 0;
@@ -410,6 +424,8 @@ std::optional<std::vector<int>> gather_fds_to_redirect() {
 using remapped_fd_set = std::vector<std::array<unique_fd, 2>>;
 
 remapped_fd_set remap_redirected_fds(std::vector<int> fds_to_redirect) {
+  /* Create intermediate fds for each given one, then pass the intermediates to flatpak-spawn,
+     that way the epoll broker can bridge them. */
   remapped_fd_set remapped;
 
   for (int fd : fds_to_redirect) {
@@ -494,6 +510,7 @@ void flatpak_spawn(std::vector<std::string> args, std::vector<int> fds_to_redire
 
 int sandbox_supervisor(unique_fd fd) {
   debug_detail::prog = "sandbox-supervisor";
+  rename_process("flatpakcrsbxspv");
 
   if (prctl(PR_SET_PDEATHSIG, SIGKILL) == -1) {
     auto err = errno_code();
@@ -720,7 +737,12 @@ namespace uint32_pair {
   }
 }
 
-int epoll_loop(pid_t child, remapped_fd_set remapped) {
+int epoll_broker(pid_t child, remapped_fd_set remapped) {
+  /* The epoll broker's job is to bridge file descriptors, in order to make SCM_CREDENTIALS's
+     PID something the zygote can track. */
+  rename_process("flatpakcrepbrkr");
+  debug_detail::prog += " (epoll broker)";
+
   unique_fd epfd{epoll_create1(0)};
   if (!epfd) {
     auto err = errno_code();
@@ -846,14 +868,16 @@ int spawn_sandbox(std::vector<std::string> args, std::vector<int> fds_to_redirec
     log() << "fork: " << err.message() << std::endl;
     return 1;
   } else if (forked == 0) {
+    /* If we're at the top level, then we need to start a helper process (the sandbox
+       supervisor) to forward sandbox spawn requests to (the bus isn't available inside a
+       sandbox). Otherwise, send the sandbox request to the supervisor. */
     if (std::find(args.begin(), args.end(), "--type=zygote") != args.end()) {
       return start_zygote_and_sandbox_supervisor(std::move(args), std::move(fds_to_redirect));
     } else {
       return ask_sandbox_supervisor_to_spawn(std::move(args), std::move(fds_to_redirect));
     }
   } else {
-    debug_detail::prog += " (epoll loop)";
-    return epoll_loop(forked, std::move(remapped));
+    return epoll_broker(forked, std::move(remapped));
   }
 }
 
@@ -872,15 +896,18 @@ int main(int argc, char** argv) {
   std::vector<std::string> args{argv, argv + argc};
 
   if (args[1] == "--get-api") {
+    // Mimick sandbox API version 1.
     std::cout << 1 << std::endl;
     return 0;
   } else if (args[1] == "--adjust-oom-score") {
     debug() << "XXX ignoring --adjust-oom-score" << std::endl;
     return 0;
   } else if (args[1] == "--wrap-spawned") {
+    // This is running inside the sandbox.
     debug_detail::prog = args[2];
     return run_command_with_sandbox_helper(std::move(args));
   } else {
+    // This is a request to start a new process sandboxed.
     debug_detail::prog = args[1];
 
     if (auto fds_to_redirect_opt = gather_fds_to_redirect()) {
