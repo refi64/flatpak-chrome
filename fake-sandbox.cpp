@@ -745,8 +745,8 @@ int epoll_loop(pid_t child, remapped_fd_set remapped) {
     }
   }
 
-  std::vector<char> iov_buffer(4 * 1024 * 1024, 0);
-  std::vector<char> ctl_buffer(4 * 1024 * 1024, 0);
+  std::vector<std::byte> iov_buffer(4 * 1024 * 1024, 0_b);
+  std::vector<std::byte> ctl_buffer(4 * 1024 * 1024, 0_b);
 
   for (;;) {
     int status;
