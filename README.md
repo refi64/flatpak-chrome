@@ -20,12 +20,13 @@ Official proprietary Chrome binaries, running sandboxed inside a Flatpak environ
 - **This cannot yet be legally distributed**, as it bundles Chrome itself inside the Flatpak
   instead of using extra-data. This is likely a pretty easy change, but I haven't made it
   yet simply because leaving it inside is easier to debug for now.
+- **CRITICAL:** Random freezing and crashes, seems to be somehow related to the child pid fix
+  but not entirely sure yet.
 - Code needs more comments. It started out nicely, but some of the more recent additions got a
   bit messy.
 - iframes sometimes randomly crash. Based on glancing at the log messages, this may be due to
   shared memory issues.
 - Can sometimes randomly freeze when trying to close the window.
-- The zygote still sometimes gets messages from PID 2. I might know why but haven't fixed it yet.
 - The epoll broker can use quite a bit of CPU (~25% on my Core i3-7100u).
 - PNaCl does not work (so e.g. Google Earth will never load). This is lower priority than the
   other bullet points here since PNaCl is deprecated anyway.

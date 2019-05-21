@@ -53,28 +53,61 @@ DECLARE_OVERRIDE(int, __xstat64, int ver, const char *path, struct stat64 *buf) 
   return result;
 }
 
-// Chrome expects recvmsg to return a proper pid, not...pid 0.
+/* When the zygote forks, the child sends a message to the outermost parent process (the
+   browser) to get the child's real, non-namespaced PID. However, here the browser can't
+   get the pid from SCM_CREDENTIALS because of the flatpak-spawn sandbox, so it sends back pid 0
+   which messes with the zygote.
+
+   The workaround is to override fork to track the last forked PID, and then recvmsg will
+   intercept the child PID message and replace the bad PID with the proper one. */
+
+thread_local pid_t last_forked_pid = -1;
+DECLARE_OVERRIDE(pid_t, fork) {
+  auto original = fork_load();
+
+  int result = original();
+  if (result > 0) {
+    last_forked_pid = result;
+  }
+  return result;
+}
+
 DECLARE_OVERRIDE(ssize_t, recvmsg, int fd, struct msghdr* msg, int flags) {
   auto original = recvmsg_load();
+  constexpr int zygote_socket_pair_fd = 3;
+  constexpr int zygote_fork_real_pid_command = 4;
+  constexpr int zygote_fork_real_pid_size = sizeof(int) * 2;
+  constexpr int zygote_fork_real_pid_pickled_size = sizeof(uint32_t) + zygote_fork_real_pid_size;
+
+  /* constexpr int bad_pid = 2; */
+  constexpr int bad_pid = 0;
 
   ssize_t res = original(fd, msg, flags);
   if (res == -1) {
     return res;
   }
 
-  if (msg->msg_controllen > 0) {
-    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
-      if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_CREDENTIALS) {
-        pid_t& pid = reinterpret_cast<struct ucred*>(CMSG_DATA(cmsg))->pid;
-        if (pid == 0) {
-          /* XXX: Zygote also tries to track these processes, so this needs to somehow be
-             wired to the flatpak-spawn PID */
-          pid = 2;
-        }
-        break;
-      }
+  if (fd == zygote_socket_pair_fd && res >= zygote_fork_real_pid_pickled_size &&
+      msg->msg_iovlen == 1 && msg->msg_iov->iov_len >= zygote_fork_real_pid_pickled_size &&
+      reinterpret_cast<int*>(msg->msg_iov->iov_base)[0] == zygote_fork_real_pid_size &&
+      reinterpret_cast<int*>(msg->msg_iov->iov_base)[1] == zygote_fork_real_pid_command) {
+    int& pid = reinterpret_cast<int*>(msg->msg_iov->iov_base)[2];
+    if (pid == bad_pid) {
+      pid = last_forked_pid;
     }
   }
+
+  /* if (msg->msg_controllen > 0) { */
+  /*   for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) { */
+  /*     if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_CREDENTIALS) { */
+  /*       pid_t& pid = reinterpret_cast<struct ucred*>(CMSG_DATA(cmsg))->pid; */
+  /*       if (pid == 0) { */
+  /*         pid = bad_pid; */
+  /*       } */
+  /*       break; */
+  /*     } */
+  /*   } */
+  /* } */
 
   return res;
 }
