@@ -22,6 +22,7 @@ Official proprietary Chrome binaries, running sandboxed inside a Flatpak environ
   yet simply because leaving it inside is easier to debug for now.
 - **CRITICAL:** Random freezing and crashes, seems to be somehow related to the child pid fix
   but not entirely sure yet.
+- SIGTERMs on close.
 - Code needs more comments. It started out nicely, but some of the more recent additions got a
   bit messy.
 - iframes sometimes randomly crash. Based on glancing at the log messages, this may be due to

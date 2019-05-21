@@ -855,12 +855,12 @@ int epoll_broker(pid_t child, remapped_fd_set remapped) {
 }
 
 int spawn_sandbox(std::vector<std::string> args, std::vector<int> fds_to_redirect) {
-  auto remapped = remap_redirected_fds(fds_to_redirect);
-
   if (prctl(PR_SET_PDEATHSIG, SIGKILL) == -1) {
     auto err = errno_code();
     log() << "warning: prctl on parent: " << err.message() << std::endl;
   }
+
+  auto remapped = remap_redirected_fds(fds_to_redirect);
 
   pid_t forked = fork();
   if (forked == -1) {

@@ -16,13 +16,10 @@ using namespace std::literals::string_view_literals;
 
 // Some helpers to assist with loading the original functions.
 namespace loading_detail {
-  std::atomic<bool> dlsym_safe;
-
   template <typename T>
   T load_func(T& ptr, std::string_view name) {
     if (!ptr) {
       ptr = reinterpret_cast<T>(dlsym(RTLD_NEXT, name.data()));
-      dlsym_safe.store(true);
     }
 
     return ptr;
@@ -113,8 +110,6 @@ DECLARE_OVERRIDE(ssize_t, recvmsg, int fd, struct msghdr* msg, int flags) {
 }
 
 DECLARE_OVERRIDE(int, close, int fd) {
-  /* close isn't always dlsym-safe but also is a pretty simple syscall, just DIY it */
-
   // Skip closing fake-sandbox's sandbox_supervisor_fd.
   if (fd == 235) {
     return 0;
@@ -182,6 +177,7 @@ DECLARE_OVERRIDE(ssize_t, write, int fd, const void *buf, size_t len) {
   return original(fd, buf, len);
 }
 
+// open64 and close cannot use dlopen early on, so we just always use the syscall directly.
 DECLARE_OVERRIDE(int, open64, const char *path, int flags, ...) {
   int mode = 0;
 
@@ -193,25 +189,14 @@ DECLARE_OVERRIDE(int, open64, const char *path, int flags, ...) {
     va_end(va);
   }
 
-  // Use the syscall if dlsym hasn't been confirmed to be safe.
-  if (!loading_detail::dlsym_safe.load()) {
-    // On x64 systems, off64_t and off_t are the same at the ABI level, so O_LARGEFILE
-    // isn't needed.
-    return syscall(__NR_openat, AT_FDCWD, path, flags, mode);
-  }
-
-  auto original = open64_load();
-
   if (sandbox_tracking_detail::chroot_request_sent.load() && "/proc/self/exe"sv == path) {
     errno = ENOENT;
     return -1;
   }
 
-  if (__OPEN_NEEDS_MODE(flags)) {
-    return original(path, flags, mode);
-  } else {
-    return original(path, flags);
-  }
+  // On x64 systems, off64_t and off_t are the same at the ABI level, so O_LARGEFILE
+  // isn't needed.
+  return syscall(__NR_openat, AT_FDCWD, path, flags, mode);
 }
 
 // If we're supposed to be in the sandbox, pretend we're PID 1.
